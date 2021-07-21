@@ -27,14 +27,16 @@ from pathlib import Path
 import itertools
 import math
 import sys
-
+import pathlib
 # Enable importing modules from opt-viewer
 sys.path.append('./opt-viewer')
 import optrecord
 import optviewer
 import optdiff
 
+sys.path.append('./utils')
 from hotness import *
+from Code_Instrumentation import *
 
 
 def invoke_optviewer(filelist, output_html_dir, jobs, print_progress, builds=[]):
@@ -68,20 +70,23 @@ def invoke_optdiff(yaml_file_1, yaml_file_2, filter_only, out_yaml):
             100000,         # max remarks
             out_yaml)       # output yaml
 
-def run(config, program, reps, dry, with_perf):
+def run(config, program, reps, dry, with_perf, instrumented=False):
+    instrumented_str = '-instrumented' if instrumented else ''
     print('Launching program', program, 'with modes', config[program]['build'])
     perf_command = 'perf record --freq=100000 -o perf.data' if with_perf else ''
     exe = config[program]['env'] + ' ' + perf_command + ' ' + config[program]['run'] + ' ' + config[program]['input']
     os.makedirs('./results', exist_ok=True)
     results = {program: {}}
     try:
-        with open('./results/results-%s.yaml'%(program), 'r') as f:
-            results = yaml.load(f, Loader=CLoader)
+        # only check for existing results when we are not running an instrumented version
+        if not instrumented:
+            with open('./results/results-%s.yaml'%(program), 'r') as f:
+                results = yaml.load(f, Loader=CLoader)
     except FileNotFoundError as e:
         pass
 
     for mode in config[program]['build']:
-        bin_dir = './bin/' + program + '/' + mode + '/'
+        bin_dir = './bin/' + program + '/' + mode + instrumented_str + '/'
         if not os.path.isfile( bin_dir + config[program]['bin'] ):
             print('ERROR: Missing binary %s'%( bin_dir + config[program]['bin'] ) )
             return
@@ -140,8 +145,9 @@ def run(config, program, reps, dry, with_perf):
 
                 results[program][mode].append(runtime)
 
-                with open('./results/results-%s.yaml'%(program), 'w') as f:
-                    yaml.dump( results, f )
+                if not instrumented:
+                    with open('./results/results-%s.yaml'%(program), 'w') as f:
+                        yaml.dump( results, f )
         # if we run with perf, we generate the report
         if with_perf:
             hotlines = get_hot_lines_percentage(config[program]['bin'], bin_dir)
@@ -169,7 +175,7 @@ def show_stats(config, program):
         print(b[0], ':', '%8.3f'%(b[1]), 's,', 'slowdown/%s: %8.3f'%(ranked[0][0], b[1]/ranked[0][1]) )
     print('=======')
    
-def merge_stats_reports( program, build_dir, mode ):
+def merge_stats_reports( program, build_dir, mode, instrumented_str= '' ):
     # generate unified optimization report
     reports_dir = './reports/' + program + '/'
     os.makedirs( reports_dir, exist_ok=True )
@@ -196,7 +202,7 @@ def merge_stats_reports( program, build_dir, mode ):
         fdata = re.sub('File: \'([^\.\/])', 'File: \'' + os.path.expanduser('~') + r'/\1', fdata)
 
         data += fdata
-
+    mode += instrumented_str
     with open(reports_dir + mode + '.opt.yaml', 'w') as f:
         f.write( data )
 
@@ -215,9 +221,12 @@ def merge_stats_reports( program, build_dir, mode ):
     with open(reports_dir + mode  + '.stats.yaml', 'w') as f:
         yaml.dump( data, f, default_flow_style=False )
 
-def compile_and_install(config, program, repo_dir, mode):
-    build_dir = repo_dir + '/' + config[program]['build_dir']
-    bin_dir = './bin/' + program + '/' + mode + '/'
+def compile_and_install(config, program, repo_dir, mode, instrumented=False):
+    # append '-instrumented' to bin directory if we are using building the instrumented version 
+    instrumented_str = '-instrumented' if instrumented else ''
+    
+    build_dir = repo_dir + '/' + config[program]['build_dir'] + instrumented_str
+    bin_dir = './bin/' + program + '/' + mode + instrumented_str + '/'
     exe = bin_dir + config[program]['bin']
     # File exists
     if os.path.isfile(exe):
@@ -226,17 +235,27 @@ def compile_and_install(config, program, repo_dir, mode):
             return
 
     os.makedirs(bin_dir, exist_ok=True)
-    print('Clean...')
-    subprocess.run( config[program]['clean'], cwd=build_dir, shell=True)
-    print('===> Build...program %s mode %s\n%s' % (program, mode, config[program]['build'][mode]) )
+    
+    if not instrumented:
+        print('Clean...')
+        subprocess.run( config[program]['clean'], cwd=build_dir, shell=True)
+
+    
+    instrumented_cxxflags= ' -I../../include/' if instrumented else ''
+    CXXFLAGS = 'CXXFLAGS="' + config[program]['build'][mode]['cxxflags']+ instrumented_cxxflags+'"'
+
+    instrumented_ldflags= ' ../../include/libFarosInstrument.a' if instrumented else ''    
+    LDFLAGS = 'LDFLAGS="' + config[program]['build'][mode]['ldflags'] + instrumented_ldflags + '"'
+    build_command = config[program]['build'][mode]['make'] + ' ' + CXXFLAGS + ' ' + LDFLAGS
+    print('===> Build...program %s mode %s\n%s' % (program, mode, build_command) )
     try:
-        subprocess.run( config[program]['build'][mode], cwd=build_dir, shell=True )
+        subprocess.run( build_command, cwd=build_dir, shell=True )
     except Exception as e:
         print('building %s mode %s failed'%(program, mode), e)
         sys.exit(1)
 
     print('Merge stats and reports...')
-    merge_stats_reports( program, build_dir, mode )
+    merge_stats_reports( program, build_dir, mode, instrumented_str )
 
     print('Copy...')
     for copy in config[program]['copy']:
@@ -296,7 +315,7 @@ def generate_diff_reports(report_dir, builds, mode, with_perf):
         generate_diff_html()
 
 
-def generate_remark_reports(config, program, with_perf):
+def generate_remark_reports(config, program, with_perf, instrumented=False):
     report_dir = './reports/' + program + '/'
 
     def generate_html():
@@ -342,15 +361,61 @@ def fetch(config, program):
     # clean and fetch (if needed)
     subprocess.run( config[program]['fetch'], cwd=repo_dir, shell=True)
 
-def build(config, program):
+def build(config, program, instrumented=False):
     repo_dir = './repos/'
-    build_dir = repo_dir + '/' + config[program]['build_dir']
-    if not os.path.exists(build_dir):
-        fetch(config, program)
+    build_dir = repo_dir  + config[program]['build_dir']
 
-    # build
+
+    # If we are doing a normal build, we make a new dir for instrumentation build
+    if not instrumented:
+        # remove the existent build dir
+        if os.path.exists(build_dir): 
+            shutil.rmtree(build_dir, ignore_errors=True, onerror=None)
+        # fetch the program to build
+        fetch(config, program)
+        
+        
+        instrumented_build_dir = build_dir + '-instrumented'
+        if os.path.exists(instrumented_build_dir):
+            ans = input('Instrumented build for program  %s exists, regenerate (y/n)?\n'%(program))
+            if ans.lower() == 'y':
+                print("removing existing instrumented build")
+                shutil.rmtree(instrumented_build_dir, ignore_errors=True, onerror=None)
+                
+        # our instrumented build initially is the same as original build dir
+        shutil.copytree( build_dir, instrumented_build_dir)
+        #shutil.copy('./ignored/lulesh.cc',instrumented_build_dir) # for debug only
+        
+    
     for b in config[program]['build']:
-        compile_and_install(config, program, repo_dir, b)
+        compile_and_install(config, program, repo_dir, b, instrumented)
+
+
+def instrument_code_regions(config, program):
+    if 'clang-tools-dir' not  in config[program]:
+        print("Error clang-tools-dir key not found in the config file")
+        sys.exit(1) 
+    
+
+    original_build_dir = config[program]['build_dir'] 
+    instrumented_build_dir = original_build_dir + '-instrumented'
+    
+    
+    # insert instrumentations for each hot region right now we insert instrumentation for each missed optimization in hot functions for each build)
+    insert_instrumentations(original_build_dir, instrumented_build_dir, config, program)
+    
+    
+
+    
+    
+    
+    # build, run, generate reports for the instrumented version
+    build(config, program, instrumented=True)
+    
+    run( config, program, 1, False, False, instrumented=True )
+    
+    generate_remark_reports( config, program, False, instrumented=True  )
+    
 
 def main():
     print('main')
@@ -366,6 +431,7 @@ def main():
     parser.add_argument('-d', '--dry-run', dest='dry', action='store_true', help='enable dry run')
     parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', help='verbose printing')
     parser.add_argument('-pc', '--perf', dest='perf', action='store_true', help='use perf')
+    parser.add_argument('--instrument', dest='instrument', action='store_true', help='instrument hot code regions')
     args = parser.parse_args()
 
     with open(args.input, 'r') as f:
@@ -380,6 +446,7 @@ def main():
         print('args.run', args.run)
         print('args.generate', args.generate)
         print('args.perf', args.perf)
+        print('args.instrument', args.instrument)
 
     programs = []
     if args.programs:
@@ -399,6 +466,8 @@ def main():
             run( config, p, args.run, args.dry, args.perf )
         if args.generate:
             generate_remark_reports( config, p, args.perf )
+        if args.instrument:
+            instrument_code_regions( config, p)
         if args.stats:
             show_stats( config, p)
 
