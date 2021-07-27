@@ -1,5 +1,7 @@
 import yaml
 from hotness import *
+import subprocess
+from subprocess import PIPE
 
 # Takes 1- list of python dict each has line_start,line_end,function_start,function_end keys and their vals
 # 		2- new file path after adding instrumentations, this is a value for "outfile" value in yaml file
@@ -22,23 +24,6 @@ def generate_instrumentation_regions_single_yaml_file(instrumentation_regions, n
 	f = open(yaml_outfile_path,'w')
 	yaml.dump(yaml_out_dict,f, default_flow_style=False)
 	f.close()
-
-
-# get list of instrumentation regions, each represented by dict, for certain (one and only one) cpp file
-# input is a dict of missed optimizations for one file
-def get_instrumentation_regions_list():
-	return
-
-# takes missed optimzations yaml file for single build (or multi builds?) and generate yaml files that contains instrumentation
-# configuration for each instrumented file
-# returns a list of paths of generated yaml file
-# OUTPATH OF A FILE AFTER INSTRUMENTATION SHOULD BE THE FILE ITSELF. We dont need the mainfile anymore in this build.
-# THE GENERATION REPORTS SHOULD HAVE THE OLD FILES. right? yes but is this the right decision?
-def gen_instrumentations_yaml_files():
-	# get each file separately
-	# make dict [
-	return
-
 
 
 
@@ -77,18 +62,18 @@ def insert_instrumentations(original_build_dir, instrumented_build_dir, config, 
         generate_instrumentation_regions_single_yaml_file(instrumentation_regions, new_source_file_path, instrumentation_regions_yaml_file_path)
         
         # call the clang action
+        instrument_tool = config[program]['clang-tools-dir']
+        instrument_action = instrument_tool + ' -config-file ' + instrumentation_regions_yaml_file_path + ' ' + source_file_path
+        
+        print('Instrumenting Action using clang tool: ',instrument_action)
+        p = subprocess.run(instrument_action, shell=True, stdout=PIPE, stderr=PIPE)
+        out = str(p.stdout.decode('utf-8', errors='ignore'))
+        err = str(p.stderr.decode('utf-8', errors='ignore'))
+        print(out, '\n\n', err)
         
         
         
         
-        
-    
-
-
-
-
-
-
 
 def test_generate_instrumentation_regions_single_yaml_file():
 	instrumentation_regions = [{"line_start":3, "line_end":4,"function_start":"custum_s1()","function_end":"custum_end1()"},

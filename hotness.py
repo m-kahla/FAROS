@@ -170,6 +170,12 @@ def add_hot_missed_opts(missed_opts_dict, report_file_path, hot_funcs):
         if remark_funcname not in hot_funcs:
             skipped_count += 1
             continue
+            
+            
+        # sometimes missed opts are at line 0. Skip them to avoid errors
+        if remark_line < 1:
+            skipped_count += 1
+            continue        
     
         
         if remark_filename not in missed_opts_dict:

@@ -6,3 +6,7 @@ __pycache__*
 ignored*
 reports*
 results*
+uploadfilestolassen*
+include/FarosInstrument.o
+include/libFarosInstrument.a
+

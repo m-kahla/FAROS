@@ -14,7 +14,7 @@
 
 import argparse
 import yaml
-from yaml import CLoader
+from yaml import Loader as CLoader
 import argparse
 import subprocess
 from subprocess import PIPE
@@ -73,7 +73,7 @@ def invoke_optdiff(yaml_file_1, yaml_file_2, filter_only, out_yaml):
 def run(config, program, reps, dry, with_perf, instrumented=False):
     instrumented_str = '-instrumented' if instrumented else ''
     print('Launching program', program, 'with modes', config[program]['build'])
-    perf_command = 'perf record --freq=100000 -o perf.data' if with_perf else ''
+    perf_command = 'perf record --freq=10000 -o perf.data' if with_perf else ''
     exe = config[program]['env'] + ' ' + perf_command + ' ' + config[program]['run'] + ' ' + config[program]['input']
     os.makedirs('./results', exist_ok=True)
     results = {program: {}}
@@ -236,8 +236,11 @@ def compile_and_install(config, program, repo_dir, mode, instrumented=False):
 
     os.makedirs(bin_dir, exist_ok=True)
     
-    if not instrumented:
-        print('Clean...')
+    print('Clean...')
+    if instrumented:
+        shutil.rmtree(build_dir, ignore_errors=True, onerror=None)
+        shutil.copytree( build_dir + '-reserve', build_dir)
+    else:    
         subprocess.run( config[program]['clean'], cwd=build_dir, shell=True)
 
     
@@ -375,16 +378,17 @@ def build(config, program, instrumented=False):
         fetch(config, program)
         
         
-        instrumented_build_dir = build_dir + '-instrumented'
+        instrumented_build_dir = build_dir + '-instrumented-reserve'
         if os.path.exists(instrumented_build_dir):
             ans = input('Instrumented build for program  %s exists, regenerate (y/n)?\n'%(program))
             if ans.lower() == 'y':
                 print("removing existing instrumented build")
                 shutil.rmtree(instrumented_build_dir, ignore_errors=True, onerror=None)
-                
-        # our instrumented build initially is the same as original build dir
-        shutil.copytree( build_dir, instrumented_build_dir)
-        #shutil.copy('./ignored/lulesh.cc',instrumented_build_dir) # for debug only
+                shutil.copytree( build_dir, instrumented_build_dir)
+        else:
+            # our instrumented build initially is the same as original build dir
+            shutil.copytree( build_dir, instrumented_build_dir)
+            #shutil.copy('./ignored/lulesh.cc',instrumented_build_dir) # for debug only
         
     
     for b in config[program]['build']:
@@ -407,6 +411,11 @@ def instrument_code_regions(config, program):
     
 
     
+    #print(instrumented_build_dir)
+    #input('remove instrumetation dir manually here')
+    #shutil.rmtree('./repos/'+instrumented_build_dir, ignore_errors=False, onerror=None) # for debug only
+    #shutil.copytree( './ignored/LULESH-instrumented', './repos/'+instrumented_build_dir) # for debug only
+    #input('check if instrumentation is there')
     
     
     # build, run, generate reports for the instrumented version
